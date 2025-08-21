@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ollama UI (Secure, No History)</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div id="login-overlay" class="overlay">
+<div class="card">
+<h2>Sign in</h2>
+<form id="login-form">
+<label>Username <input id="username" autocomplete="username" /></label>
+<label>Password <input id="password" type="password" autocomplete="current-password" /></label>
+<button type="submit">Login</button>
+<p id="login-error" class="error"></p>
+</form>
+</div>
+</div>
+
+
+<div class="layout">
+<aside class="sidebar">
+<div class="brand">Ollama UI</div>
+<div class="section">
+<label class="label">Model</label>
+<select id="model"></select>
+</div>
+<div class="section">
+<button id="clear">Clear chat</button>
+<button id="logout" class="ghost">Logout</button>
+</div>
+<div class="foot">No chat history is saved.</div>
+</aside>
+
+
+<main class="chat">
+<div id="messages" class="messages"></div>
+<form id="composer" class="composer">
+<textarea id="input" rows="1" placeholder="Ask anything…"></textarea>
+<button id="send" type="submit">Send</button>
+</form>
+</main>
+</div>
+
+
+<script src="/app.js" defer></script>
+</body>
+</html>
