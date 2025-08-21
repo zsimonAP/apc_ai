@@ -1,21 +1,17 @@
 FROM node:20-alpine
 
-
 WORKDIR /app
 
+COPY package*.json ./
+RUN npm ci --omit=dev
 
-# Install deps first for better layer caching
-COPY package.json package-lock.json ./
-RUN npm ci --only=production
+COPY server.js ./server.js
+COPY public ./public
 
-
-# Copy source
-COPY . .
-
+# Run as non-root
+RUN addgroup -S app && adduser -S app -G app && chown -R app:app /app
+USER app
 
 ENV PORT=3000
 EXPOSE 3000
-
-
-# Note: running as root to read Docker secrets at /run/secrets
 CMD ["node", "server.js"]

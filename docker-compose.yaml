@@ -1,61 +1,29 @@
-version: "3.9"
-
+version: "3.8"
 
 services:
-ollama:
-image: ollama/ollama:latest
-# Comment out the volume below if you truly want EVERYTHING ephemeral.
-# Keeping it lets you retain downloaded model weights without saving chats.
-volumes:
-- ollama:/root/.ollama
-networks: [internal]
-# Do NOT publish 11434 to the host. Keep it internal only.
-# ports: ["11434:11434"] # Leave commented for security
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    # Start server, give it a moment to boot, then pull the model. Keeps serving afterward.
+    entrypoint: ["/bin/sh","-lc","ollama serve & sleep 1 && ollama pull gemma3:1b || true; wait"]
 
-
-ui:
-build: .
-image: local/ollama-ui:latest
-depends_on: [ollama]
-ports: ["3000:3000"] # expose ONLY the UI
-environment:
-- NODE_ENV=production
-- PORT=3000
-- OLLAMA_URL=http://ollama:11434
-- COOKIE_NAME=auth
-- RATE_WINDOW_MS=900000 # 15min
-- RATE_MAX=100 # 100 reqs / window per IP
-- LOGIN_RATE_MAX=10 # tighter on login
-secrets:
-- admin_user
-- password_hash
-- jwt_secret
-networks: [internal]
-restart: unless-stopped
-# Lock this down further if you like; read-only root FS + tmpfs
-read_only: true
-tmpfs:
-- /tmp
-logging:
-driver: json-file
-options:
-max-size: "10m"
-max-file: "3"
-
+  web:
+    build: .
+    container_name: gemma3-chat
+    restart: unless-stopped
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=gemma3:1b
+      - NODE_ENV=production
+    ports:
+      - "3000:3000"
+    depends_on:
+      - ollama
 
 volumes:
-ollama:
-
-
-networks:
-internal:
-driver: bridge
-
-
-secrets:
-admin_user:
-file: ./secrets/admin_user.txt
-password_hash:
-file: ./secrets/password_hash.txt
-jwt_secret:
-file: ./secrets/jwt_secret.txt
+  ollama:
