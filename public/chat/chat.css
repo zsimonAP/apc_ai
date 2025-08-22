@@ -1,0 +1,62 @@
+/* Uses tokens from /shared/style.css; adds chat layout & bubbles */
+
+.chat-page{
+  display:flex; flex-direction:column; min-height:100vh; background:var(--bg); color:var(--text);
+}
+
+/* Top bar */
+.topbar{
+  position:sticky; top:0; z-index:10; backdrop-filter:saturate(120%) blur(6px);
+  background:linear-gradient(180deg, rgba(22,26,34,.85), rgba(22,26,34,.70));
+  border-bottom:1px solid var(--border);
+}
+.topbar .inner{ max-width:960px; margin:0 auto; padding:10px 16px; }
+.model-bar{ display:flex; gap:10px; align-items:center; margin-top:6px; }
+
+/* Main thread area */
+.chat-main{
+  flex:1; display:flex; justify-content:center;
+}
+.thread{
+  width:100%; max-width:960px; padding:16px; padding-bottom:96px; /* leave space for composer */
+  overflow:auto;
+}
+
+/* Message rows */
+.msg{
+  display:grid; grid-template-columns: 44px 1fr; gap:10px;
+  margin:0 auto 14px auto; align-items:flex-start;
+}
+.avatar{
+  width:44px; height:44px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  background:var(--panel-2, #1b2230); color:var(--muted); font-weight:700; font-size:12px;
+  border:1px solid var(--border);
+}
+.msg.user .avatar{ background:#0b1220; color:#9bb4ff; }
+.msg.assistant .avatar{ background:#12213a; color:#a7f3d0; }
+
+.bubble{
+  background:var(--panel); border:1px solid var(--border);
+  border-radius:16px; padding:12px 14px; box-shadow:var(--shadow);
+}
+.bubble .label{ font-size:12px; color:var(--muted); margin-bottom:6px; }
+.bubble .body{ white-space:pre-wrap; word-wrap:break-word; }
+
+/* Composer at bottom */
+.composer{
+  position:sticky; bottom:0; border-top:1px solid var(--border);
+  background:linear-gradient(0deg, rgba(22,26,34,.95), rgba(22,26,34,.90));
+  padding:10px 0;
+}
+.composer-inner{
+  max-width:960px; margin:0 auto; display:flex; gap:10px; align-items:flex-end; padding:0 16px;
+}
+.composer textarea{
+  flex:1; resize:none; min-height:44px; max-height:180px;
+  background:#0b1220; color:var(--text); border:1px solid var(--border);
+  border-radius:12px; padding:10px 12px; outline:none;
+}
+.composer .btn{ height:44px; }
+
+.tips{ max-width:960px; margin:6px auto 0 auto; padding:0 16px; }

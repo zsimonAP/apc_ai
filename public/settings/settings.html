@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>APC AI — Settings</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/shared/style.css" />
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div id="navbar"></div>
+      <h2>Settings</h2>
+
+      <div class="row">
+        <input id="modelName" class="input" placeholder="e.g. gemma3:1b" />
+        <button class="btn" id="pull">Pull Model</button>
+      </div>
+      <p class="badge">Tip: you can also pull models with <code>docker compose exec ollama ollama pull &lt;name&gt;</code></p>
+      <pre id="result" class="card"></pre>
+    </div>
+  </div>
+  <script>
+    fetch('/shared/navbar.js').then(r=>r.text()).then(html => {
+      document.getElementById('navbar').innerHTML = html;
+      [...document.querySelectorAll('.nav a')].forEach(a=>{
+        if (a.getAttribute('href').includes('/settings/')) a.classList.add('active');
+      });
+    });
+
+    document.getElementById('pull').onclick = async () => {
+      const name = document.getElementById('modelName').value.trim();
+      if (!name) return;
+      const res = await fetch('/api/models/pull', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ model: name })
+      });
+      document.getElementById('result').textContent = JSON.stringify(await res.json(), null, 2);
+    };
+  </script>
+</body>
+</html>

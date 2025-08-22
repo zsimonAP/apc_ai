@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>APC AI — Chat</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/shared/style.css" />
+  <link rel="stylesheet" href="/chat/chat.css" />
+</head>
+<body>
+  <div class="chat-page">
+    <header class="topbar">
+      <div class="inner">
+        <div id="navbar"></div>
+        <div class="model-bar">
+          <span class="badge">Model</span>
+          <select id="model"></select>
+          <button class="btn" id="refreshModels">Refresh</button>
+          <span class="badge" id="status"></span>
+        </div>
+      </div>
+    </header>
+
+    <main class="chat-main">
+      <div class="thread" id="thread"></div>
+    </main>
+
+    <footer class="composer">
+      <div class="composer-inner">
+        <textarea id="prompt" rows="1" placeholder="Message APC AI… (Shift+Enter for newline)"></textarea>
+        <button class="btn" id="send" title="Send">Send</button>
+      </div>
+      <div class="tips">
+        <span class="badge">History isn’t stored. Page keeps conversation in-memory only.</span>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    // Inject navbar
+    fetch('/shared/navbar.js').then(r=>r.text()).then(html => {
+      document.getElementById('navbar').innerHTML = html;
+      [...document.querySelectorAll('.nav a')].forEach(a=>{
+        if (a.getAttribute('href').includes('/chat/')) a.classList.add('active');
+      });
+    });
+
+    // Elements
+    const threadEl   = document.getElementById('thread');
+    const modelSel   = document.getElementById('model');
+    const refreshBtn = document.getElementById('refreshModels');
+    const promptEl   = document.getElementById('prompt');
+    const sendBtn    = document.getElementById('send');
+    const statusEl   = document.getElementById('status');
+
+    // In-memory conversation (not persisted)
+    const messages = [
+      { role: 'system', content: 'You are a helpful assistant.' }
+    ];
+
+    // Utilities
+    function el(tag, cls, text){
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text != null) e.textContent = text;
+      return e;
+    }
+    function scrollToBottom(){
+      threadEl.scrollTop = threadEl.scrollHeight;
+    }
+
+    // Render one message bubble
+    function renderMessage({role, content}){
+      if (role === 'system') return; // don’t render system
+      const wrapper = el('div', `msg ${role}`);
+      const avatar  = el('div', 'avatar', role === 'user' ? 'You' : 'AI');
+      const bubble  = el('div', 'bubble');
+      const label   = el('div', 'label', role === 'user' ? 'You' : 'AI');
+      const body    = el('div', 'body');
+
+      bubble.appendChild(label);
+      body.textContent = content || ''; // initial (may stream)
+      bubble.appendChild(body);
+      wrapper.appendChild(avatar);
+      wrapper.appendChild(bubble);
+      threadEl.appendChild(wrapper);
+      scrollToBottom();
+      return { wrapper, body };
+    }
+
+    async function loadModels() {
+      modelSel.innerHTML = '';
+      try {
+        const res = await fetch('/api/models');
+        const data = await res.json();
+        const models = data?.models || [];
+        const def = (await (await fetch('/api/healthz')).json()).model;
+
+        for (const m of models) {
+          const opt = document.createElement('option');
+          opt.value = m.name;
+          opt.textContent = m.name;
+          if (m.name === def) opt.selected = true;
+          modelSel.appendChild(opt);
+        }
+        if (!models.length && def) {
+          const opt = document.createElement('option');
+          opt.value = def; opt.textContent = def; modelSel.appendChild(opt);
+        }
+      } catch (e) {
+        console.error(e);
+        statusEl.textContent = 'Failed to load models';
+      }
+    }
+
+    refreshBtn.onclick = loadModels;
+
+    // Handle Enter/Shift+Enter
+    promptEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendBtn.click();
+      }
+    });
+
+    // Auto-grow textarea
+    function autoGrow() {
+      promptEl.style.height = 'auto';
+      const max = 180; // px cap
+      promptEl.style.height = Math.min(promptEl.scrollHeight, max) + 'px';
+    }
+    promptEl.addEventListener('input', autoGrow);
+    autoGrow();
+
+    let streaming = false;
+
+    sendBtn.onclick = async () => {
+      const text = promptEl.value.trim();
+      if (!text || streaming) return;
+
+      const model = modelSel.value || (await (await fetch('/api/healthz')).json()).model;
+
+      // Render user message
+      const userMsg = { role: 'user', content: text };
+      messages.push(userMsg);
+      renderMessage(userMsg);
+
+      // Prepare assistant bubble (will stream in)
+      const assistantMsg = { role: 'assistant', content: '' };
+      const { body: assistantBody } = renderMessage(assistantMsg);
+
+      // Reset composer / set state
+      promptEl.value = '';
+      autoGrow();
+      streaming = true;
+      sendBtn.disabled = true;
+      statusEl.textContent = 'Streaming…';
+
+      // Build request body with full conversation (system + history + new user)
+      const body = {
+        model,
+        messages: messages,
+      };
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(body)
+        });
+
+        const reader  = res.body.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          const text = decoder.decode(value, { stream: true });
+          // parse SSE lines: "data: {json}\n\n"
+          text.split('\n').forEach(line => {
+            if (!line.startsWith('data: ')) return;
+            try {
+              const obj = JSON.parse(line.slice(6));
+              if (obj?.message?.content) {
+                assistantMsg.content += obj.message.content;
+                assistantBody.textContent = assistantMsg.content;
+                scrollToBottom();
+              }
+              if (obj?.done) {
+                statusEl.textContent = 'Done.';
+              }
+            } catch {}
+          });
+        }
+
+        // Push assistant message into history
+        messages.push({ role: 'assistant', content: assistantMsg.content });
+
+      } catch (e) {
+        console.error(e);
+        statusEl.textContent = 'Error during chat.';
+        assistantBody.textContent += '\n[Error receiving response]';
+      } finally {
+        streaming = false;
+        sendBtn.disabled = false;
+        setTimeout(()=>{ if (statusEl.textContent === 'Done.') statusEl.textContent = ''; }, 1500);
+      }
+    };
+
+    // Init
+    loadModels();
+  </script>
+</body>
+</html>
