@@ -12,7 +12,7 @@
     <header class="topbar">
       <div class="inner">
         <div id="navbar"></div>
-        <div class="model-bar">
+        <div class="model-bar" style="gap:12px; align-items:center;">
           <span class="badge">Model</span>
           <select id="model"></select>
           <button class="btn" id="refreshModels">Refresh</button>
@@ -27,6 +27,10 @@
 
     <footer class="composer">
       <div class="composer-inner">
+        <div class="file-row">
+          <input id="fileInput" type="file" />
+          <span id="fileName" class="badge"></span>
+        </div>
         <textarea id="prompt" rows="1" placeholder="Message APC AI… (Shift+Enter for newline)"></textarea>
         <button class="btn" id="send" title="Send">Send</button>
       </div>
@@ -52,6 +56,8 @@
     const promptEl   = document.getElementById('prompt');
     const sendBtn    = document.getElementById('send');
     const statusEl   = document.getElementById('status');
+    const fileInput  = document.getElementById('fileInput');
+    const fileName   = document.getElementById('fileName');
 
     // In-memory conversation (not persisted)
     const messages = [
@@ -65,13 +71,11 @@
       if (text != null) e.textContent = text;
       return e;
     }
-    function scrollToBottom(){
-      threadEl.scrollTop = threadEl.scrollHeight;
-    }
+    function scrollToBottom(){ threadEl.scrollTop = threadEl.scrollHeight; }
 
     // Render one message bubble
     function renderMessage({role, content}){
-      if (role === 'system') return; // don’t render system
+      if (role === 'system') return;
       const wrapper = el('div', `msg ${role}`);
       const avatar  = el('div', 'avatar', role === 'user' ? 'You' : 'AI');
       const bubble  = el('div', 'bubble');
@@ -79,7 +83,7 @@
       const body    = el('div', 'body');
 
       bubble.appendChild(label);
-      body.textContent = content || ''; // initial (may stream)
+      body.textContent = content || '';
       bubble.appendChild(body);
       wrapper.appendChild(avatar);
       wrapper.appendChild(bubble);
@@ -112,7 +116,6 @@
         statusEl.textContent = 'Failed to load models';
       }
     }
-
     refreshBtn.onclick = loadModels;
 
     // Handle Enter/Shift+Enter
@@ -126,88 +129,139 @@
     // Auto-grow textarea
     function autoGrow() {
       promptEl.style.height = 'auto';
-      const max = 180; // px cap
+      const max = 180;
       promptEl.style.height = Math.min(promptEl.scrollHeight, max) + 'px';
     }
     promptEl.addEventListener('input', autoGrow);
     autoGrow();
 
+    fileInput.addEventListener('change', () => {
+      fileName.textContent = fileInput.files[0]?.name || '';
+    });
+
+    // -------- Typing animation (word-by-word) --------
+    let TYPE_INTERVAL_MS = 18; // fixed mid speed
+    let renderTimer = null;
+    const tokenQueue = [];
+    let currentAssistant = null; // { body, msg }
+
+    function tokenizeWords(str) {
+      return str.match(/(\s+|[^\s]+)/g) || [];
+    }
+    function enqueueTokens(str) {
+      tokenQueue.push(...tokenizeWords(str));
+      startRenderLoop();
+    }
+    function startRenderLoop() {
+      if (renderTimer) return;
+      renderTimer = setInterval(() => {
+        let burst = 2;
+        while (burst-- > 0 && tokenQueue.length) {
+          const t = tokenQueue.shift();
+          currentAssistant.body.textContent += t;
+        }
+        if (!tokenQueue.length) { clearInterval(renderTimer); renderTimer = null; }
+        scrollToBottom();
+      }, TYPE_INTERVAL_MS);
+    }
+    // -----------------------------------------------
+
     let streaming = false;
 
     sendBtn.onclick = async () => {
       const text = promptEl.value.trim();
-      if (!text || streaming) return;
+      const hasFile = fileInput.files && fileInput.files[0];
+
+      if (!text && !hasFile) return;
+      if (streaming) return;
 
       const model = modelSel.value || (await (await fetch('/api/healthz')).json()).model;
 
-      // Render user message
-      const userMsg = { role: 'user', content: text };
+      const userMsg = { role: 'user', content: text || (hasFile ? '(Analyzing uploaded file)' : '') };
       messages.push(userMsg);
       renderMessage(userMsg);
 
-      // Prepare assistant bubble (will stream in)
       const assistantMsg = { role: 'assistant', content: '' };
       const { body: assistantBody } = renderMessage(assistantMsg);
+      currentAssistant = { body: assistantBody, msg: assistantMsg };
 
-      // Reset composer / set state
       promptEl.value = '';
       autoGrow();
       streaming = true;
       sendBtn.disabled = true;
       statusEl.textContent = 'Streaming…';
 
-      // Build request body with full conversation (system + history + new user)
-      const body = {
-        model,
-        messages: messages,
-      };
+      const form = new FormData();
+      form.append('model', model);
+      form.append('messages', JSON.stringify(messages));
+      if (hasFile) form.append('file', fileInput.files[0]);
 
       try {
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify(body)
-        });
+        const res = await fetch('/api/chat', { method: 'POST', body: form });
+        if (!res.ok || !res.body) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || res.statusText);
+        }
 
         const reader  = res.body.getReader();
         const decoder = new TextDecoder();
+        let buffer = '';
 
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
-          const text = decoder.decode(value, { stream: true });
-          // parse SSE lines: "data: {json}\n\n"
-          text.split('\n').forEach(line => {
-            if (!line.startsWith('data: ')) return;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          let idx;
+          while ((idx = buffer.indexOf('\n')) >= 0) {
+            const line = buffer.slice(0, idx).trim();
+            buffer = buffer.slice(idx + 1);
+            if (!line) continue;
+            const payload = line.startsWith('data: ') ? line.slice(6) : line;
             try {
-              const obj = JSON.parse(line.slice(6));
+              const obj = JSON.parse(payload);
               if (obj?.message?.content) {
+                enqueueTokens(obj.message.content);
                 assistantMsg.content += obj.message.content;
-                assistantBody.textContent = assistantMsg.content;
-                scrollToBottom();
               }
-              if (obj?.done) {
-                statusEl.textContent = 'Done.';
-              }
-            } catch {}
-          });
+              if (obj?.done) statusEl.textContent = 'Done.';
+            } catch {
+              enqueueTokens(payload);
+              assistantMsg.content += payload;
+            }
+          }
         }
 
-        // Push assistant message into history
+        const tail = buffer.trim();
+        if (tail) {
+          try {
+            const obj = JSON.parse(tail);
+            if (obj?.message?.content) {
+              enqueueTokens(obj.message.content);
+              assistantMsg.content += obj.message.content;
+            }
+          } catch {
+            enqueueTokens(tail);
+            assistantMsg.content += tail;
+          }
+        }
+
         messages.push({ role: 'assistant', content: assistantMsg.content });
 
       } catch (e) {
         console.error(e);
         statusEl.textContent = 'Error during chat.';
-        assistantBody.textContent += '\n[Error receiving response]';
+        enqueueTokens('\n[Error receiving response]');
       } finally {
         streaming = false;
         sendBtn.disabled = false;
-        setTimeout(()=>{ if (statusEl.textContent === 'Done.') statusEl.textContent = ''; }, 1500);
+        fileInput.value = '';
+        fileName.textContent = '';
+        setTimeout(() => { if (statusEl.textContent === 'Done.') statusEl.textContent = ''; }, 1200);
       }
     };
 
-    // Init
     loadModels();
   </script>
 </body>

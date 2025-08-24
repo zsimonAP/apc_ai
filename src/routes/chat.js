@@ -1,44 +1,69 @@
-//src/routes/chat.js
-
 import { Router } from 'express';
+import multer from 'multer';
+import { extractTextFromUpload } from '../services/extractors.js';
 import { streamChat } from '../services/ollama.js';
 
 const router = Router();
 
-router.post('/', async (req, res) => {
-  const { model, messages, options } = req.body || {};
-  if (!model || !Array.isArray(messages)) {
-    return res.status(400).json({ error: 'model and messages[] are required' });
-  }
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+});
 
-  // SSE headers
-  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no'); // nginx-friendly
-  // Make sure nothing else tries to buffer this response
-  // (compression filter already skips this route)
-  res.flushHeaders?.();
-
-  // Keep the socket open
-  req.socket.setTimeout(0);
-
-  // Helper to send SSE frames
-  const send = (obj) => {
-    res.write(`data: ${typeof obj === 'string' ? obj : JSON.stringify(obj)}\n\n`);
-  };
-
+// NOTE: Mount path is /api/chat, so this must be '/' to keep endpoint at /api/chat
+router.post('/', upload.single('file'), async (req, res) => {
   try {
-    // Start streaming from Ollama; forward each NDJSON line as an SSE "data" frame
-    await streamChat({ model, messages, options }, (line) => {
-      // line is a NDJSON string (e.g., {"message":{"content":"..."}, "done":false})
-      send(line);
-    });
-  } catch (e) {
-    console.error('[chat] error:', e);
-    res.write(`event: error\ndata: ${JSON.stringify({ error: 'chat failed' })}\n\n`);
-  } finally {
-    res.end();
+    // We expect multipart/form-data with fields:
+    // - model: string
+    // - messages: JSON string (array of {role, content})
+    // - file: optional upload
+    const model = (req.body?.model || '').toString() || process.env.DEFAULT_MODEL || 'unknown';
+
+    let messages = [];
+    try {
+      messages = JSON.parse(req.body?.messages || '[]');
+      if (!Array.isArray(messages)) messages = [];
+    } catch {
+      messages = [];
+    }
+
+    // If a file was uploaded, extract text and inject as a system message
+    if (req.file?.buffer?.length) {
+      let fileContext = await extractTextFromUpload(req.file.buffer, req.file.originalname);
+
+      // Clamp text length to avoid blowing up context
+      const MAX_CHARS = 40_000;
+      if (fileContext.length > MAX_CHARS) {
+        fileContext = fileContext.slice(0, MAX_CHARS) + '\n\n…[truncated]';
+      }
+
+      const sysMsg = {
+        role: 'system',
+        content:
+          `You are analyzing an uploaded file. Use it to answer the user.\n` +
+          `Filename: ${req.file.originalname}\n\n` +
+          `===== FILE CONTENT START =====\n${fileContext}\n===== FILE CONTENT END =====`,
+      };
+
+      // Prepend so it applies to the current turn
+      messages = [sysMsg, ...messages];
+    }
+
+    // SSE headers
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    // Hand off to Ollama streaming; your streamChat should emit `data: {...}\n\n` chunks
+    await streamChat({ model, messages }, res);
+  } catch (err) {
+    console.error(err);
+    // If headers already sent (SSE started), just end
+    if (res.headersSent) {
+      res.write(`data: ${JSON.stringify({ error: 'Upload failed' })}\n\n`);
+      return res.end();
+    }
+    res.status(500).json({ ok: false, error: err?.message || 'Upload failed' });
   }
 });
 

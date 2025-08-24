@@ -25,11 +25,10 @@ app.use(morgan('tiny'));
 // Basic rate limit for API routes (skip static)
 app.use('/api/', rateLimit({ windowMs: 60 * 1000, max: 120 }));
 
-// ⚠️ Compression can break SSE. Use a filter to skip chat route.
+// ⚠️ Compression can break SSE. Skip for chat streaming.
 app.use(
   compression({
     filter: (req, res) => {
-      // Never compress the chat streaming endpoint
       if (req.path.startsWith('/api/chat')) return false;
       return compression.filter(req, res);
     },
@@ -48,7 +47,7 @@ app.get('/api/healthz', (req, res) => {
   res.json({
     ok: true,
     environment: process.env.NODE_ENV || 'development',
-    model: process.env.DEFAULT_MODEL || 'unknown'
+    model: process.env.DEFAULT_MODEL || 'unknown',
   });
 });
 
