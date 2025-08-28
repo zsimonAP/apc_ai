@@ -7,6 +7,7 @@ import cors from 'cors';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
+import csvRoutes from "./routes/csv.js";
 
 dotenv.config();
 
@@ -41,6 +42,7 @@ import chatRouter from './routes/chat.js';
 
 app.use('/api/models', modelsRouter);
 app.use('/api/chat', chatRouter);
+app.use("/api/csv", csvRoutes);
 
 // Health
 app.get('/api/healthz', (req, res) => {

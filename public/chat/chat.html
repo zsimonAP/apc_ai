@@ -65,7 +65,7 @@
       outline:none;
       background:#fff;
       line-height:1.4;
-      color: #000;
+      color:#000;
     }
 
     /* Filename chip that visually attaches to the textarea */
@@ -82,10 +82,10 @@
       padding:6px 10px;
       border:1px solid var(--border, #e5e8ef);
       background:#fff;
-      border-radius:10px 10px 6px 6px; /* slightly squarer bottom to 'dock' */
+      border-radius:10px 10px 6px 6px;
       box-shadow:var(--shadow, 0 10px 30px rgba(15,23,40,.04));
       font-size:13px;
-      color: #000;
+      color:#000;
     }
     .file-chip .name{
       overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
@@ -97,7 +97,6 @@
     }
     .file-chip .remove:hover{ color:#111827; }
 
-    /* Make chip feel attached to the textarea with a tiny connector */
     .file-chip-row::after{
       content:"";
       position:absolute;
@@ -106,40 +105,32 @@
       background:#fff;
       border-left:1px solid var(--border, #e5e8ef);
       border-right:1px solid var(--border, #e5e8ef);
-      border-bottom:1px solid #fff; /* hide bottom edge */
+      border-bottom:1px solid #fff;
       border-radius:0 0 6px 6px;
     }
 
-   /* Force black only in the composer (text input + file chip) */
-  .composer #prompt {
-    color:#000 !important;
-    -webkit-text-fill-color:#000 !important; /* Chrome/Edge */
-    caret-color:#000;
-  }
+    /* Force black only in the composer (text input + file chip) */
+    .composer #prompt {
+      color:#000 !important;
+      -webkit-text-fill-color:#000 !important; /* Chrome/Edge */
+      caret-color:#000;
+    }
+    .composer .file-chip,
+    .composer .file-chip .name,
+    .composer .file-chip .remove {
+      color:#000 !important;
+      opacity:1 !important;
+    }
+    .composer #prompt::placeholder {
+      color:#6b7280 !important;
+      opacity:1;
+    }
 
-  .composer .file-chip,
-  .composer .file-chip .name,
-  .composer .file-chip .remove {
-    color:#000 !important;
-    opacity:1 !important; /* in case theme lowers opacity */
-  }
+    /* Keep chat messages text white (theme choice) */
+    .thread .msg.user .bubble .body,
+    .thread .msg.assistant .bubble .body { color:#fff !important; }
 
-  /* Placeholder stays visible against white background */
-  .composer #prompt::placeholder {
-    color:#6b7280 !important;
-    opacity:1;
-  }
-
-  /* Keep chat messages (conversation bubbles) white */
-  .thread .msg.user .bubble .body,
-  .thread .msg.assistant .bubble .body {
-    color:#fff !important;
-  }
-
-  /* Preserve newlines inside chat bubbles */
-  .thread .bubble .body{ white-space: pre-wrap; }
-
-
+    .thread .bubble .body{ white-space: pre-wrap; }
 
     /* Hide the native file input */
     #fileInput{ display:none; }
@@ -294,7 +285,7 @@
     // Upload button triggers hidden input
     uploadBtn.addEventListener('click', () => fileInput.click());
 
-    // Show file chip (as extension above the textarea)
+    // Show/hide file chip
     function showFileChip(name){
       fileChipName.textContent = name;
       fileChipRow.style.display = 'block';
@@ -303,15 +294,11 @@
       fileChipName.textContent = '';
       fileChipRow.style.display = 'none';
     }
-
-    // Handle file selection
     fileInput.addEventListener('change', () => {
       const file = fileInput.files?.[0];
       if (file) showFileChip(file.name);
       else hideFileChip();
     });
-
-    // Remove/clear file from chip
     removeFile.addEventListener('click', () => {
       fileInput.value = '';
       hideFileChip();
@@ -339,6 +326,28 @@
     }
     // -----------------------------------------------
 
+    // CSV download helper
+    async function triggerCsvDownload(csvSpec) {
+      try {
+        const res = await fetch('/api/csv/download', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ csvjson: csvSpec }),
+        });
+        if (!res.ok) throw new Error(`CSV download failed: ${res.status}`);
+        const blob = await res.blob();
+        const filename = csvSpec.filename || 'export.csv';
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        console.error(e);
+        statusEl.textContent = 'CSV download failed';
+      }
+    }
+
     let streaming = false;
 
     sendBtn.onclick = async () => {
@@ -348,16 +357,10 @@
 
       const hasText = !!text;
       const hasFile = !!file;
-
       if (!hasText && !hasFile) return;
       if (streaming) return;
 
-      // Build ONE user message that contains the filename (if any) on top,
-      // then a blank line, then the user's text.
-      // Examples:
-      // - file only:        "test_request.csv"
-      // - file + text:      "test_request.csv\n\ntest"
-      // - text only:        "test"
+      // Build single user message showing filename above the text
       const parts = [];
       if (hasFile) parts.push(file.name);
       if (hasText) parts.push(text);
@@ -367,7 +370,7 @@
       messages.push(userMsg);
       renderMessage(userMsg);
 
-      // Prepare assistant placeholder
+      // Assistant placeholder
       const assistantMsg = { role: 'assistant', content: '' };
       const { body: assistantBody } = renderMessage(assistantMsg);
       currentAssistant = { body: assistantBody, msg: assistantMsg };
@@ -395,37 +398,67 @@
           throw new Error(err.error || res.statusText);
         }
 
+        // --- Robust SSE line parser with support for custom "event: csv" ---
         const reader  = res.body.getReader();
         const decoder = new TextDecoder();
-        let buffer = '';
+        let buf = '';
+        let currentEvent = 'message'; // default SSE event
 
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
 
-          buffer += decoder.decode(value, { stream: true });
+          buf += decoder.decode(value, { stream: true });
 
-          let idx;
-          while ((idx = buffer.indexOf('\n')) >= 0) {
-            const line = buffer.slice(0, idx).trim();
-            buffer = buffer.slice(idx + 1);
-            if (!line) continue;
-            const payload = line.startsWith('data: ') ? line.slice(6) : line;
-            try {
-              const obj = JSON.parse(payload);
-              if (obj?.message?.content) {
-                enqueueTokens(obj.message.content);
-                assistantMsg.content += obj.message.content;
+          let nl;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            let line = buf.slice(0, nl);
+            buf = buf.slice(nl + 1);
+
+            // Strip CR and trim right only (SSE allows leading 'data: ')
+            if (line.endsWith('\r')) line = line.slice(0, -1);
+
+            if (line === '') {
+              // dispatch boundary; reset event type
+              currentEvent = 'message';
+              continue;
+            }
+
+            if (line.startsWith('event:')) {
+              currentEvent = line.slice(6).trim() || 'message';
+              continue;
+            }
+
+            if (line.startsWith('data:')) {
+              const payload = line.slice(5).trimStart();
+              // Handle our CSV event
+              if (currentEvent === 'csv') {
+                try {
+                  const obj = JSON.parse(payload);
+                  if (obj?.csvjson) triggerCsvDownload(obj.csvjson);
+                } catch (e) { console.error('CSV event parse error', e); }
+                continue;
               }
-              if (obj?.done) statusEl.textContent = 'Done.';
-            } catch {
-              enqueueTokens(payload);
-              assistantMsg.content += payload;
+
+              // Normal token payloads (your server sends {message:{content}, done?, ...})
+              try {
+                const obj = JSON.parse(payload);
+                if (obj?.message?.content) {
+                  const textChunk = obj.message.content;
+                  enqueueTokens(textChunk);
+                  assistantMsg.content += textChunk;
+                }
+                if (obj?.done) statusEl.textContent = 'Done.';
+              } catch {
+                // Non-JSON fallbacks
+                enqueueTokens(payload);
+                assistantMsg.content += payload;
+              }
             }
           }
         }
 
-        const tail = buffer.trim();
+        const tail = buf.trim();
         if (tail) {
           try {
             const obj = JSON.parse(tail);
@@ -450,7 +483,6 @@
         setTimeout(() => { if (statusEl.textContent === 'Done.') statusEl.textContent = ''; }, 1200);
       }
     };
-
 
     loadModels();
   </script>
